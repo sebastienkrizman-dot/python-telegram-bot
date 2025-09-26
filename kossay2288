@@ -1,0 +1,20 @@
+import requests
+from bs4 import BeautifulSoup
+import csv
+import time
+
+# ===== CONFIGURATION =====
+query = "technicien maintenance"   # ton métier
+location = "Switzerland"           # localisation
+pages_to_scrape = 5                # nombre de pages à parcourir
+sleep_between_requests = 5         # secondes entre chaque requête pour éviter blocage
+
+output_file = "offres_suisse.csv"
+
+# ===== FONCTIONS =====
+def scrape_indeed(query, location, pages=1):
+    all_jobs = []
+    for page in range(pages):
+        start = page * 10
+        url
+
