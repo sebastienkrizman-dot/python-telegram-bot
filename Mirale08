@@ -1,0 +1,133 @@
+import os
+import requests
+from bs4 import BeautifulSoup
+import csv
+import time
+import smtplib
+from email.message import EmailMessage
+import logging
+from datetime import datetime
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+# ===== CONFIGURATION (modifiable) =====
+QUERY = os.getenv("JOB_QUERY", "technicien maintenance")
+LOCATION = os.getenv("JOB_LOCATION", "Switzerland")
+PAGES_TO_SCRAPE = int(os.getenv("PAGES_TO_SCRAPE", "3"))
+SLEEP_BETWEEN_REQUESTS = int(os.getenv("SLEEP_BETWEEN_REQUESTS", "4"))
+OUTPUT_FILE = os.getenv("OUTPUT_FILE", "offres_suisse.csv")
+
+# Email / Telegram (mettre via variables d'environnement sur Render)
+EMAIL_ADDRESS = os.getenv("kossaymirale8@gmail.com")            # ex: kossaymirale8@gmail.com
+EMAIL_PASSWORD = os.getenv("Sikobiko1979")          # mot de passe d'application Gmail (NE PAS METTRE LE MOT DE PASSE PRINCIPAL)
+TO_EMAIL = os.getenv("TO_EMAIL", EMAIL_ADDRESS)       # où envoyer les offres (par défaut à toi)
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # optionnel
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")      # optionnel
+
+# ===== FONCTIONS =====
+def scrape_indeed(query, location, pages=1):
+    all_jobs = []
+    seen_links = set()
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    for page in range(pages):
+        start = page * 10
+        url = f"https://ch.indeed.com/jobs?q={requests.utils.requote_uri(query)}&l={requests.utils.requote_uri(location)}&start={start}"
+        logging.info(f"Fetching: {url}")
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+        except Exception as e:
+            logging.warning(f"Erreur requête: {e}")
+            time.sleep(SLEEP_BETWEEN_REQUESTS)
+            continue
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        jobs = soup.find_all("div", class_="job_seen_beacon")
+        for job in jobs:
+            titre = job.find("h2").get_text(strip=True) if job.find("h2") else "N/A"
+            entreprise = job.find("span", class_="companyName").get_text(strip=True) if job.find("span", class_="companyName") else "N/A"
+            lieu = job.find("div", class_="companyLocation").get_text(strip=True) if job.find("div", class_="companyLocation") else "N/A"
+            lien_tag = job.find("a", href=True)
+            lien = "https://ch.indeed.com" + lien_tag['href'] if lien_tag else "N/A"
+
+            # évite doublons
+            if lien in seen_links:
+                continue
+            seen_links.add(lien)
+
+            all_jobs.append({
+                "Titre": titre,
+                "Entreprise": entreprise,
+                "Lieu": lieu,
+                "Lien": lien
+            })
+
+        time.sleep(SLEEP_BETWEEN_REQUESTS)
+    return all_jobs
+
+def save_to_csv(jobs, filename):
+    with open(filename, mode="w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=["Titre", "Entreprise", "Lieu", "Lien"])
+        writer.writeheader()
+        for job in jobs:
+            writer.writerow(job)
+    logging.info(f"{len(jobs)} offres enregistrées dans {filename}")
+
+def send_email(jobs, to_email):
+    if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
+        logging.warning("EMAIL_ADDRESS ou EMAIL_PASSWORD non configurés — envoi par mail ignoré.")
+        return
+
+    if not jobs:
+        logging.info("Aucune nouvelle offre à envoyer par mail.")
+        return
+
+    message = EmailMessage()
+    message['Subject'] = f"[Bot] {len(jobs)} nouvelles offres - {QUERY} - {datetime.utcnow().date()}"
+    message['From'] = EMAIL_ADDRESS
+    message['To'] = to_email
+
+    body_lines = []
+    for job in jobs:
+        body_lines.append(f"{job['Titre']} | {job['Entreprise']} | {job['Lieu']}\n{job['Lien']}\n")
+    message.set_content("\n\n".join(body_lines))
+
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as smtp:
+            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            smtp.send_message(message)
+        logging.info(f"E-mail envoyé à {to_email}")
+    except Exception as e:
+        logging.error(f"Erreur envoi e-mail: {e}")
+
+def send_telegram(jobs):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        logging.debug("Telegram non configuré — skip.")
+        return
+    if not jobs:
+        logging.info("Aucune nouvelle offre à envoyer sur Telegram.")
+        return
+    base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    text = f"{len(jobs)} nouvelles offres pour {QUERY}:\n\n"
+    for job in jobs[:10]:  # envoie max 10 pour ne pas spammer
+        text += f"{job['Titre']} — {job['Entreprise']}\n{job['Lien']}\n\n"
+    try:
+        requests.post(base_url, data={"chat_id": TELEGRAM_CHAT_ID, "text": text}, timeout=15)
+        logging.info("Message Telegram envoyé.")
+    except Exception as e:
+        logging.error(f"Erreur Telegram: {e}")
+
+# ===== EXECUTION =====
+def main():
+    logging.info("Démarrage du bot de recherche d'offres.")
+    jobs = scrape_indeed(QUERY, LOCATION, PAGES_TO_SCRAPE)
+    if jobs:
+        save_to_csv(jobs, OUTPUT_FILE)
+        send_email(jobs, TO_EMAIL)
+        send_telegram(jobs)
+    else:
+        logging.info("Aucune offre trouvée cette exécution.")
+
+if __name__ == "__main__":
+    main()
