@@ -1,0 +1,54 @@
+import requests
+from bs4 import BeautifulSoup
+import csv
+import time
+
+# ===== CONFIGURATION =====
+query = "technicien maintenance"   # ton métier
+location = "Switzerland"           # localisation
+pages_to_scrape = 5                # nombre de pages à parcourir
+sleep_between_requests = 5         # secondes entre chaque requête pour éviter blocage
+
+output_file = "offres_suisse.csv"
+
+# ===== FONCTIONS =====
+def scrape_indeed(query, location, pages=1):
+    all_jobs = []
+    for page in range(pages):
+        start = page * 10
+        url = f"https://ch.indeed.com/jobs?q={query}&l={location}&start={start}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        response = requests.get(url, headers=headers)
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        jobs = soup.find_all("div", class_="job_seen_beacon")
+        for job in jobs:
+            titre = job.find("h2").text.strip() if job.find("h2") else "N/A"
+            entreprise = job.find("span", class_="companyName").text.strip() if job.find("span", class_="companyName") else "N/A"
+            lieu = job.find("div", class_="companyLocation").text.strip() if job.find("div", class_="companyLocation") else "N/A"
+            lien_tag = job.find("a")
+            lien = "https://ch.indeed.com" + lien_tag['href'] if lien_tag else "N/A"
+
+            all_jobs.append({
+                "Titre": titre,
+                "Entreprise": entreprise,
+                "Lieu": lieu,
+                "Lien": lien
+            })
+
+        time.sleep(sleep_between_requests)  # pause pour ne pas être bloqué
+    return all_jobs
+
+def save_to_csv(jobs, filename):
+    with open(filename, mode="w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=["Titre", "Entreprise", "Lieu", "Lien"])
+        writer.writeheader()
+        for job in jobs:
+            writer.writerow(job)
+
+# ===== EXECUTION =====
+if __name__ == "__main__":
+    print("Recherche des offres en cours...")
+    jobs = scrape_indeed(query, location, pages_to_scrape)
+    save_to_csv(jobs, output_file)
+    print(f"Recherche terminée. {len(jobs)} offres ont été enregistrées dans {output_file}.")
